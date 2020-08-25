@@ -32,3 +32,10 @@ print(z)
 ```
 
 End of test
+
+Back on the Surface!
+
+```{r}
+plot(x=2)
+```
+
