@@ -19,3 +19,16 @@ Testing again:
 1. Test1
 2. Test2
 3. Test3
+
+Testing from Chromebook:
+
+```{r}
+x=2
+y=4
+
+z= x+y
+
+print(z)
+```
+
+End of test
