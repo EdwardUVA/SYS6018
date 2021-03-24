@@ -1,0 +1,5 @@
+﻿Item / Function, Potential Failure Mode(s), "Potential Effect(s) of Failure", Severity, Potential Cause(s) / Mechanism(s) of Failure, Probability of Occurance, Current Design Controls, Detection, RPN, "Recommended Action(s)"
+
+Setting threshold values low, High values of False Positive results, "False Positives are false leads that must be investigated by rescue personnel, delaying response", 6, Design choice during model tuning, 8, Training and education of system builder, 3, 144, Note 1:
+
+Setting threshold values high, High values of False Negative results, False Negative are true leads that that ignored by the system and never flagged for investigation.  Rescue personnel will never be dispatched to this location., 10, Design choice during model tuning, 4, Training and education of system builder, 10, 400, Note 2:

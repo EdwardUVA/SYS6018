@@ -1,0 +1,2035 @@
+---
+title: "Disaster Relief Project Part 2"
+author: "Edward Thompson (ejt8b)"
+date: "`r Sys.Date()`"
+
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true    
+
+# automagic date! https://bookdown.org/yihui/rmarkdown-cookbook/update-date.html
+# Table of Contents https://bookdown.org/yihui/rmarkdown-cookbook/rmarkdown-anatomy.html
+# fold the code https://bookdown.org/yihui/rmarkdown-cookbook/fold-show.html
+# add variables to report https://www.earthdatascience.org/courses/earth-analytics/multispectral-remote-sensing-modis/add-variables-to-rmarkdown-report/
+---
+
+```{r setup, include=FALSE, error=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+#library pile
+
+library(MASS) #for lda
+library(class) # for qda, KNN
+library(tidyverse)
+library(GGally)
+library(broom)
+library(readr)
+library(caret)
+library(yardstick)
+library(dplyr)
+library(knitr)
+library(LiblineaR) #for SVM Linear
+library(kernlab) #for SVM Radial and Poly
+library(randomForest) #for RF
+library(doParallel) #magic parallel processing code from Bobby via Bob
+
+registerDoParallel(5, cores = 5)
+getDoParWorkers()
+```
+
+```{r, message=FALSE}
+knit.start = Sys.time()
+```
+
+# Introduction 
+
+Extending our previous analysis of modeling methods in _Disaster Relief Project Part 1_, we are continuing to use the HaitiPixels dataset to evaluate two additional machine learning models; Random Forrest (RF) and Support Vector Machines (SVM).  These new models are in addition to models used in the _Part 1_ of the project: K Nearest Neighbors (KNN), Linear Discriminant Analysis (LDA), Quadratic Discriminant Analysis (QDA), and Logistic Regression (GLM).  
+
+In _Part 2_ of the project we are reusing the HaitiPixels dataset and removing the split that previously created a holdout data set in _Part 1_.  The full data set was used to do a 10 fold cross validation and tuning for all models.
+
+We were presented with a new hold out data set for _Part 2_.  This new data was used for predicting and scoring all the models.  The new dataset will be discussed in detail in Hold Out Data Performance section.
+
+# K-Folds Out of Sampling Performance
+
+A summary table of the performance of the tuned models on _Out of Sample Data_ is presented below.  This table was created in a previous run of code that is summarized in Table 2.
+
+The threshold values were chosen using our training dataset. The values selected were chosen to minimize, but not completely eliminate, the amount of false negatives.  The justification of the thresholds chosen will is presented in the conclusions section.
+
+```{r, message=FALSE}
+#show code, hide output I don't need
+#https://stackoverflow.com/questions/47710427/how-to-show-code-but-hide-output-in-rmarkdown
+#read in table created during later analysis for knit
+
+knit.table2 = read_csv("table2.csv")
+```
+
+```{r}
+# make a prettier table than a tibble
+# https://bookdown.org/yihui/rmarkdown-cookbook/tables.html
+
+kable(knit.table2,
+      format="simple", 
+      align = "l", 
+      caption = "Table 2: Performance Metrics: 10-Fold Cross-Validation Metrics")
+```
+
+# Hold Out Data Performance
+
+For this project we were presented with a number of text files that needed to be examined, cleaned, and made into usable data.  The first attempt reading the file directly into R on my computer resulted in my computer nearly locking up as R attempted to read the large (~90MB) text file.   To solve this issue the files were first read into excel where unnecessary rows and columns of data were stripped to reduce the file size.  Then a column was added with the identification of tarp or no tarp based on the file nomenclature.  These files were saved as a .csv file then brought into a separate R script to examine the columns, ensure that the data aligned, then join two .csv files together.  This was repeated until all the files had been joined.  The additional script is provided in a separate file.
+
+Once the Final Hold Out (FHO) file was assembled it had just over 2 Million records.  These records were used to make the predictions using the models and tuning that were developed as part of our previous 10 fold cross validation.  The details of the predictions can be found in the Predictions Using Hold Out Data section.
+
+A summary table of the performance of the various models on _Hold Out Data_ is presented below.
+
+```{r, message=FALSE}
+#read in table created during later analysis for knit
+
+knit.table3 = read_csv("table3.csv")
+```
+
+```{r}
+# make a prettier table than a tibble
+# https://bookdown.org/yihui/rmarkdown-cookbook/tables.html
+
+kable(knit.table3,
+      format="simple", 
+      align = "l", 
+      caption = "Table 3: Performance Metrics: Hold-Out Test Data Set Scores")
+```
+
+# Conclusions
+
+In Tables 2 and 3 we have been presented with a number of metrics.  To define our metrics in common terms and provide relevance to our scenario they are each discussed in the following section.  
+
+## Definition of Terms
+
+### Accuracy
+This metric is used to determine how correctly the models could determine a tarp object from a non-tarp given our three colors channels, Red, Green and Blue.  Our scale is from 0 to 1 with 1 being a perfect score.  In our training data all of our models were above 98% accurate and in the tested with a new data set all were above 96%.
+
+### AUC
+The Area Under the Curve (AUC) describes how close the model is to having a "perfect" ROC curve.  This can be used to identify models that have higher performance than others.  The values are from 0 to 1 with 1 being a perfect score. 
+    
+### Sensitivity
+Similar to Accuracy but focused only on positive predictions, this metric indicates proportion of true positive values out of the values predicted positive by the model. The values again are are from 0 to 1 with 1 being a perfect score.  For our scenario this predicted tarps compared to all the objects that are predicted to be tarps. 
+    
+### Specificity
+A companion to sensitivity, this metric indicated the true negative values out of the values predicted negative by the model. Our scale is from 0 to 1 with 1 being a perfect score.  
+    
+### FDR (False Discovery Rate)
+The metric measures our total number of false positives out of the predicted total number of positives.  It is similar to Sensitivity but focused on the false positives. The scale is from 0 to 1 with lower being better.   For our scenario this represents the ratio non-tarp objects that are predicted as tarps. 
+
+### Precision 
+A similar metric to Sensitivity and FDR, precision measures the ratio of the true positives to all actual positives.  The scale is from 0 to 1 with higher being better.  In this case this is the ratio of predicted tarp objects to all actual tarp objects.
+
+## Evaluation of Accuracy
+
+For all the models an evaluation of the accuracy by the cross validation fold was conducted and a plot of the accuracy of the fold was plotted vs. the fold number to provide a visual representation of the variability of the accuracy.  In general the training accuracy of the model is very similar to each individual fold.  For this data set most of the variation in accuracy from one fold to another seems to be in the ten thousandths or thousandths place.  While there is some minor variation the overall accuracy will be used when discussing model results.  Detailed plots of each fold and comparison of each fold individual accuracy can be found in the Models Applied to Problem section.
+
+## Best Algorithm
+
+The algorithm that works the absolute best in terms of overall accuracy in the 10-fold cross validation is the SVM using a radial kernel.  This was followed by our KNN and QDA models.
+
+
+```{r}
+#95% values for each model
+
+y=c(1, 1, 1)
+#don't know how to get a dynamically assigned variable name
+y2 = y*2
+y3 = y*3
+y4 = y*4
+y5 = y*5
+y6 = y*6
+
+x.knn=c(knit.table2[2]$KNN[11], 
+        knit.table2[2]$KNN[1], 
+        knit.table2[2]$KNN[12])
+
+x.lda=c(knit.table2[3]$LDA[11], 
+        knit.table2[3]$LDA[1], 
+        knit.table2[3]$LDA[12])
+
+x.qda=c(knit.table2[4]$QDA[11], 
+        knit.table2[4]$QDA[1], 
+        knit.table2[4]$QDA[12])
+
+x.glm=c(knit.table2[5]$GLM[11], 
+        knit.table2[5]$GLM[1], 
+        knit.table2[5]$GLM[12])
+
+x.rf=c(knit.table2[6]$RF[11], 
+        knit.table2[6]$RF[1], 
+        knit.table2[6]$RF[12])
+
+x.svm=c(knit.table2[7]$SVM[11], 
+        knit.table2[7]$SVM[1], 
+        knit.table2[7]$SVM[12])
+
+
+
+```
+
+```{r}
+#Showed this the original plot to Camille.  She liked it but said to reverse the axis for clarity.  As usual she was right... it was faster to flip code than change the variables.  So thats why they look backwards.
+
+plot(y, x.knn, type = "b", col = 'blue', ylim = c(0.987, .999), xlim = c(.9, 6.2), pch = 0, main = "Plot of Model Accuracy 95% CI from 10 Fold CV", xlab = "Model Number", ylab = "Accuracy")
+lines(y2, x.lda, type = "b", col = "black", pch = 1)
+lines(y3, x.qda, type = "b", col = "orange", pch = 2)
+lines(y4, x.glm, type = "b", col = "red", pch = 3)
+lines(y5, x.rf, type = "b", col = "brown", pch = 4)
+lines(y6, x.svm, type = "b", col = "purple", pch = 5)
+legend(x=5.2,
+       y=.995,
+       legend=c("KNN", "LDA", "QDA","GLM", "RF", "SVM"), 
+       col =c("blue", "black","orange","red", "brown", "purple"), 
+       pch=c(0, 1, 2,3, 4, 5)
+       )
+```
+
+Again what is very surprising is how well ALL of the various models performed on the training data set. The accuracy variation between all of the models is about 1%.  It appears that ANY of these models could be used with success in the particular scenario of the project.
+
+Looking at the results from the test data there has been an interesting turn of events.  The leading model from training, SVM is now second to last in accuracy.  The new leader is QDA followed closely by RF and KNN.  It is likely that in tuning of the SVM model that it was over trained, that this is an example of test error rates being higher than training error rates, that the training dataset was not entirely representative of the test data, or some combination thereof which results in the SVM models lower performance on the FHO Data.
+
+```{r}
+#95% CI values for each model in HOData
+x.knn.ho=c(knit.table3[2]$KNN[11], 
+        knit.table3[2]$KNN[1], 
+        knit.table3[2]$KNN[12])
+
+x.lda.ho=c(knit.table3[3]$LDA[11], 
+        knit.table3[3]$LDA[1], 
+        knit.table3[3]$LDA[12])
+
+x.qda.ho=c(knit.table3[4]$QDA[11], 
+        knit.table3[4]$QDA[1], 
+        knit.table3[4]$QDA[12])
+
+x.glm.ho=c(knit.table3[5]$GLM[11], 
+        knit.table3[5]$GLM[1], 
+        knit.table3[5]$GLM[12])
+
+x.rf.ho=c(knit.table3[6]$RF[11], 
+        knit.table3[6]$RF[1], 
+        knit.table3[6]$RF[12])
+
+x.svm.ho=c(knit.table3[7]$SVM[11], 
+        knit.table3[7]$SVM[1], 
+        knit.table3[7]$SVM[12])
+
+```
+
+```{r}
+plot(y, x.knn.ho, type = "b", col = 'blue', ylim = c(0.962, .996), xlim = c(.9, 6.05), pch = 0, main = "Plot of Model Accuracy 95% CI from Final Hold Out Data", xlab = "Model Number", ylab = "Accuracy")
+lines(y2, x.lda.ho, type = "b", col = "black", pch = 1)
+lines(y3, x.qda.ho, type = "b", col = "orange", pch = 2)
+lines(y4, x.glm.ho, type = "b", col = "red", pch = 3)
+lines(y5, x.rf.ho, type = "b", col = "brown", pch = 4)
+lines(y6, x.svm.ho, type = "b", col = "purple", pch = 5)
+legend(x=.9,
+       y=.985,
+       legend=c("KNN", "LDA", "QDA","GLM", "RF", "SVM"), 
+       col =c("blue", "black","orange","red", "brown", "purple"), 
+       pch=c(0, 1, 2,3, 4, 5)
+       )
+
+```
+
+It should be noted that while even with the potential sources of error the overall accuracy from the range of 0.98 to 0.96.  Other than the GLM model, all others are still above 0.98 accuracy, with a training vs. test error range change of only about 1%.
+
+In our statistics class last semester we were introduced to the Receiver Operating Characteristic curve.  I was personally interested as it was an outgrowth of the development of early RADAR systems which were deployed fairly early during WWII following the concept of "Perfect is the enemy of the good." Robert Watson-Watt as a pioneer of these early RADAR systems had a good method to refine the perfect/good balance.  He sugested "Give them the third best to go on with; the second best comes too late, the best never comes."  As someone who has spent a great deal of time in product development I have a great appreciation that a tool _right now_ that works can be life changing.  Watson-Watt also forms a resonating cord with the KISS principle advocated by Kelly Johnson, of the greatest aerospace engineers in my lifetime, to keep things simple to avoid errors.  Both of these concepts played into the decision making process by considering factors such as model tuning difficulty, model model pre-processing, and running time, when evaluating the top three models from the 10 fold CV and their associated scores in Table 2.
+
+If I was forced to choose any one particular method I would use the QDA model as that model does not have the detailed tuning parameters (other than setting a threshold) that KNN and SVM require.  The running time of the QDA model was much faster then either KNN or SVM models.  QDA models and predictions could be run in a matter of seconds where the KNN and SVM models could take tens of minutes depending on tuning parameters.  When running a KNN prediction its completion times were similar to the time to run a model and SVM prediction times was significantly faster (about 10x) than running the SVM model.  From a usability perspective these short running times and minimal tuning requirements would be advantageous if this model was being run in the field by rescue personnel that are likely in a high stress environment that will be short on sleep, hungry, and likely be reliant on an unstable power grid which might interrupt a model with a long running time.  All of these factors make QDA a robust model for the scenario presented in this project.
+
+It is surprising that using the FHO data to generate the results of Table 3 how well QDA performed in accuracy, beating out all other contenders in the data that had not been previously explored.  I offer that QDA is the Rodney Dangerfield of methods, it gets no respect, despite having a strong abilities.  Additionally RF, my other personal favorite for its robustness and adherence to the KISS principle, was very close second in accuracy in the hold out data, however where RF truly shined was in sensitivity.  While this did result in a very high false positive rate, nearly two times the true positive rate, very few tarps were falsely labeled as a non-tarp.  Both QDA and RF beat their performance accuracy with training data while maintaining a very high sensitivity. 
+
+One item we only touched on at the end of class was stacking.  Could we take the output from the RF model, which did so well in turning up all the tarps either as TP or FP, and then take that output to another model which would be better is sorting tarps from non-tarps?  The in concept feels similar to what we did with the tensor flow examples.  This seems like a subject for another class.
+
+## Failure Modes and Effects Analysis
+In place of doing a cost resource budget analysis of FP/FN errors a FEMA has been conducted on the setting of the model thresholds.   
+
+In the scenario of this exercise a false negative represents a displaced persons who would not receive assistance from rescue workers as their tarp would be scored as a non-tarp object and excluded from the list location submitted to rescue personnel. A false positive in situation represents a non-blue tarp object being identified as a blue tarp. These false positives represent time wasted by rescue workers in determining that there are no displaced person present.  In _Part 1_ it was argued that a false positive is the lesser hazard with the following:
+
+_The threshold value was chosen to minimize but not completely eliminate the false negatives in the training dataset due to the possibility of creating a useless classifier. The setting of the threshold is very much a case of “Don’t let the perfect be the enemy of the good.” By driving the false negatives to an acceptable minimum utilization of rescue workers investigating real and probable displaced persons should be maximized. Additionally as the data was collected in multiple flights and analyzed nightly repeated surveys should further reduce the likelihood of a false negative occurring consistently at the same location. When rescue operations seemed to identified and invested the majority of false positive locations, the threshold could be further adjusted down knowing that more false positives would be generated to ensure that no actual blue tarps would not be investigated._
+
+FMEA is a inductive reasoning process that was first developed by the military and has since been adopted as a core tenant in safety, reliability and quality engineering practices.  It is commonly used to evaluate product designs as well as processes.  
+
+In a FMEA a failure mode is identified and then its risk priority number (RPN) is scored according to three criteria, severity of the failure, probability of the failure, and the likelihood of detection of the failure.  Typically any individual score of a 9 or 10 in any category or a combined over RPN of over 100 would require a corrective action which would be documented and a new RPN generated based on the corrective actions.  
+
+A simplified FMEA was conducted on threshold setting of the models and is shown in Table 4.  The individual criteria scores were assigned using industry standard scoring methods.  The corrective actions were omitted from the table and replaced with simplified notes below Table 4.  
+
+```{r, message=FALSE}
+#read in table created during later analysis for knit
+
+fema.table = read_csv("FMEA3.csv", col_names = TRUE)
+```
+
+```{r}
+# make a prettier table than a tibble
+# https://bookdown.org/yihui/rmarkdown-cookbook/tables.html
+
+kable(fema.table,
+      format="simple", 
+      align = "l", 
+      caption = "Table 4: Failure Modes Effects Analysis of Threshold Values")
+```
+
+Note 1: Use additional sensors to further refine ability to determine tarp objects.  Ensure communication to rescue personnel that objects identified as tarps have a high possibility (up to 1/8) of not being correctly identified.  Best practice would be to investigate large groups of tarps before sending rescue personnel to investigate single objects. This routing optimization sounds like a project for another class.
+
+Note 2:
+Setting the threshold high has the effect of training the system to ignore actual tarp objects.  This represents actual victims that will NOT identified by the system.  If the victims are NOT identified by the system they will never receive assistance from rescue personnel.  *This is an unethical design choice is not be acceptable for any reasonable system design.*  This is similar to the design choice that Uber made when testing self driving systems in Arizona leading to the death of pedestrian.  In pursuit of a smoother ride experience the threshold was set too high and the system classified the pedestrian as a non-pedestrian.  If such a system were designed and put into place I would not wish to be the one who has to testify about the decisions that were made at the time nor carry the burden knowing the lives that were lost due to creating a system to ignore those in need.  In both cases the severity score is high because death is a likely result and the detection score is high because we are unable to detect the error. The only correct corrective action is to lower the threshold.
+
+As demonstrated in Table 4 a suitable corrective action identified in previous conclusions to _Part 1_.
+
+_What would be useful to enhance the ability of this these models to be used as classifier would be some additional camera information from the IR and UV ends of the spectrum. These additional imaging methods would likely be able to further differentiate the synthetic blue of the tarp from other naturally occurring blues and also be able to determine the reflectively of the synthetic material vs. naturally occurring materials._
+
+## Great Isn't Good Enough
+
+In my previous experience I wold normally think that an accuracy of `r knit.table2[[7]][1]` would be great, if not outstanding.  
+
+However in the scenario of this project with the large hold out dataset that our great accuracy utilizing QDA still results in nearly 4000 falsely misclassified tarp objects that would result if those displaced people not being identified to rescue personnel.  While these machine learning tools are useful for in pulling needles out of the haystack of this data they can not be the only tool used.  Redundancy from other traditional rescue systems are still be required to minimize the loss of life. 
+
+## References
+https://asq.org/quality-resources/fmea  
+https://www.lehigh.edu/~intribos/Resources/FMEA-template.xls  
+https://en.wikipedia.org/wiki/Perfect_is_the_enemy_of_good  
+https://en.wikipedia.org/wiki/Confusion_matrix  
+https://en.wikipedia.org/wiki/KISS_principle  
+https://en.wikipedia.org/wiki/Failure_mode_and_effects_analysis  
+https://spectrum.ieee.org/cars-that-think/transportation/self-driving/ntsb-investigation-into-deadly-uber-selfdriving-car-crash-reveals-lax-attitude-toward-safety  
+Numerous conversations with other members of the Summer 2020 Cohort.  
+Individual code blocks will have reference to methods used.
+
+# Analysis, Data and Code
+
+Started the project by importing our original data again.  To improve our final hold out performance, and intermediate holdout was not created and all the data was used for 10 fold cross validation training of the models.
+
+```{r}
+set.seed(14) #birthday seed since we don't have Shilpa's split
+raw.data <- read_csv("HaitiPixels.csv")
+
+raw.data$tarp <- as.factor(ifelse(raw.data$Class == "Blue Tarp", "Tarp", "No.Tarp"))
+
+#raw.data.org = raw.data
+
+raw.data = raw.data[c(2:5)]
+
+raw.data %>% as_tibble() %>% summary()
+```
+
+# Models Applied to Problem
+
+## Model Training Control
+
+Two training controls were used to for training the various models in Caret.  As the SVM models do not generate probabilities natively due to the nature of the SVM model the classProbs call was removed.  The training controls are otherwise identical.
+
+```{r}
+# HTH to use caret http://topepo.github.io/caret/model-training-and-tuning.html
+
+# Define training control, we'll use this for all the models unless we need something special
+
+train.control <- trainControl(method = "cv", 
+                              number = 10, 
+                              returnResamp='all', 
+                              savePredictions=TRUE, 
+                              classProbs=TRUE,
+                              allowParallel=TRUE)
+
+#Only asked to do a 10 fold cv.  No need to resample each fold.  Makes huge dataset huge-er.
+
+#using allowParallel this time.  Dropped KNN time by half.
+
+#train for svm no class prob
+train.control2 <- trainControl(method = "cv", 
+                              number = 10, 
+                              returnResamp='all', 
+                              savePredictions=TRUE, 
+                              allowParallel=TRUE)
+
+#train.control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+```
+
+## K Nearest Neighbors (KNN)
+
+### KNN Model Training
+
+```{r}
+# Train the KNN model
+# measure the time too https://www.r-bloggers.com/2017/05/5-ways-to-measure-running-time-of-r-code/
+
+start.time = Sys.time()
+  
+knn.model <- train(tarp ~ Red + Blue + Green, 
+                   data = raw.data, 
+                   method = "knn", 
+                   preProcess = c("center","scale"), 
+                   trControl = train.control, 
+                   tuneGrid = expand.grid(k = c(5, 6, 7, 8, 9, 10))
+                   )
+
+end.time = Sys.time()
+
+knn.model.time = end.time - start.time
+
+# Summarize the results
+print(knn.model)
+
+plot(knn.model)
+
+knn.model$finalModel
+
+knn.model$bestTune
+
+final.knn.model = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% as_tibble() 
+
+final.knn.model
+```
+
+The final model selected for KNN after training was K=`r knn.model$bestTune$k`.
+
+### KNN Model Analysis, Out of Fold Examination, ROC Curve
+
+To conduct a detailed examination of the variability of the model the results of each cross validation fold were placed into a confusion matrix and the results shown in the four fold plots below.  Additionally the accuracy from each fold as calculated in individual confusion matrices were extracted and plotted by the corresponding fold number.  It can be seen from the plot that the overall accuracy of the individual variability of the accuracy from fold to fold is very low, in the ten thousandths place.  The overall accuracy from the full 10 fold model is a good representation.  This method was performed on all models with similar results.
+
+```{r, fig.show="hold", out.width="50%"}
+# https://bookdown.org/yihui/rmarkdown-cookbook/figures-side.html}
+
+#the caret object that holds all the magic
+# view(knn.model$pred)
+
+#filter results for each fold
+
+knn.Fold1 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold01") %>% as_tibble() 
+knn.Fold2 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold02") %>% as_tibble() 
+knn.Fold3 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold03") %>% as_tibble() 
+knn.Fold4 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold04") %>% as_tibble() 
+knn.Fold5 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold05") %>% as_tibble() 
+knn.Fold6 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold06") %>% as_tibble() 
+knn.Fold7 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold07") %>% as_tibble() 
+knn.Fold8 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold08") %>% as_tibble() 
+knn.Fold9 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold09") %>% as_tibble() 
+knn.Fold10 = knn.model$pred %>% filter(k==knn.model$bestTune$k) %>% filter(Resample == "Fold10") %>% as_tibble() 
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.5
+fourfoldplot(as.table(table(knn.Fold1$pred, knn.Fold1$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold1")
+
+fourfoldplot(as.table(table(knn.Fold2$pred, knn.Fold2$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold2")
+
+fourfoldplot(as.table(table(knn.Fold3$pred, knn.Fold3$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold3")
+
+fourfoldplot(as.table(table(knn.Fold4$pred, knn.Fold4$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold4")
+
+fourfoldplot(as.table(table(knn.Fold5$pred, knn.Fold5$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold5")
+
+fourfoldplot(as.table(table(knn.Fold6$pred, knn.Fold6$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold6")
+
+fourfoldplot(as.table(table(knn.Fold7$pred, knn.Fold7$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold7")
+
+fourfoldplot(as.table(table(knn.Fold8$pred, knn.Fold8$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold8")
+
+fourfoldplot(as.table(table(knn.Fold9$pred, knn.Fold9$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold9")
+
+fourfoldplot(as.table(table(knn.Fold10$pred, knn.Fold10$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix knn.Fold10")
+
+
+#confusionMatrix uses default threshold of 0.5
+knn.cmf1 = confusionMatrix(knn.Fold1$pred, knn.Fold1$obs)
+knn.cmf2 = confusionMatrix(knn.Fold2$pred, knn.Fold2$obs)
+knn.cmf3 = confusionMatrix(knn.Fold3$pred, knn.Fold3$obs)
+knn.cmf4 = confusionMatrix(knn.Fold4$pred, knn.Fold4$obs)
+knn.cmf5 = confusionMatrix(knn.Fold5$pred, knn.Fold5$obs)
+knn.cmf6 = confusionMatrix(knn.Fold6$pred, knn.Fold6$obs)
+knn.cmf7 = confusionMatrix(knn.Fold7$pred, knn.Fold7$obs)
+knn.cmf8 = confusionMatrix(knn.Fold8$pred, knn.Fold8$obs)
+knn.cmf9 = confusionMatrix(knn.Fold9$pred, knn.Fold9$obs)
+knn.cmf10 = confusionMatrix(knn.Fold10$pred, knn.Fold10$obs)
+
+knn.model.cm = confusionMatrix(final.knn.model$pred, final.knn.model$obs)
+knn.model.cm
+
+#out of fold accuracy, read in each value
+knn.acc.col = c(knn.cmf1$overall[[1]], knn.cmf2$overall[[1]], knn.cmf3$overall[[1]], knn.cmf4$overall[[1]], knn.cmf5$overall[[1]], knn.cmf6$overall[[1]], knn.cmf7$overall[[1]], knn.cmf8$overall[[1]], knn.cmf9$overall[[1]], knn.cmf10$overall[[1]])
+
+fold.num = c(1:10)
+
+knn.acc.calc.cv = mean(knn.acc.col)
+knn.acc.calc.oa = knn.model.cm$overall[[1]]
+
+knn.acc.delta.cvoa = knn.acc.calc.cv - knn.acc.calc.oa #check to see if average CV acc - all acc is ~0 withing rounding errors 
+
+#Plot ROC here to make the plots line up
+plot(fold.num, knn.acc.col, main = "KNN CV Fold Number Accuracy vs. Fold Number", ylab = "Accuracy", xlab = "Fold Number")
+abline(h=knn.acc.calc.oa, col = "blue")
+legend(1, y=0.998, legend="KNN Model Average Accuracy", col ="blue", lty=1)
+
+#make ROC curve
+# HTH to yardstick ROC https://yardstick.tidymodels.org/reference/roc_curve.html
+
+knn.roc.train = yardstick::roc_curve(final.knn.model, 
+                                     "No.Tarp",
+                                     truth = final.knn.model$obs)
+
+autoplot(knn.roc.train)
+```
+
+### KNN AUC and Thresholds
+
+```{r, fig.show="hold", out.width="50%"}
+#calc AUC, 
+
+knn.auc = yardstick::roc_auc(final.knn.model,
+                             "No.Tarp",
+                             truth = final.knn.model$obs)
+knn.auc
+
+#manually reset threshold
+
+#set tarp/no tarp based on fold pred$tarp Start at standard 0.5
+
+final.knn.model$TPred = as.factor(ifelse(final.knn.model$No.Tarp > 0.1, "No.Tarp", "Tarp"))
+
+#table for hand adjusting matrix threshold
+#org table
+# xtab.knn.org = table(final.knn.model$pred, final.knn.model$obs)
+# xtab.knn.org
+# 
+# #new threshold 0.1
+# xtab.knn.adj = table(final.knn.model$TPred, final.knn.model$obs)
+# xtab.knn.adj
+
+#confusionMatrix feeding it the new threshold data 0.1
+knn.threshold.cm = confusionMatrix(final.knn.model$TPred, final.knn.model$obs)
+knn.threshold.cm
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.1
+fourfoldplot(as.table(table(final.knn.model$TPred, final.knn.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "KNN Confusion Matrix Threshold 0.1: Training Data")
+
+final.knn.model$TPred = as.factor(ifelse(final.knn.model$No.Tarp > 0.9, "No.Tarp", "Tarp"))
+
+#confusionMatrix feeding it the new threshold data 0.9
+confusionMatrix(final.knn.model$TPred, final.knn.model$obs)
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.9
+fourfoldplot(as.table(table(final.knn.model$TPred, final.knn.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "KNN Confusion Matrix Threshold 0.9: Training Data")
+
+```
+
+### KNN Precision Recall Curve
+
+```{r}
+#Special thanks to Sam who recommended the yardstick version as it was so much easier to get running with the rest of the yardstick data.
+
+knn.pr.train = yardstick::pr_curve(final.knn.model, 
+                                    "No.Tarp", 
+                                    truth = final.knn.model$obs)
+
+autoplot(knn.pr.train)
+```
+
+
+```{r, message=FALSE}
+#make a column of the final scores
+#Michael and I were talking about tables and he had the model times in his.  I also added a column for Tuning Parameters
+
+method.col = c("Accuracy",
+               "AUC",
+               "ROC",
+               "Threshold",
+               "Sensitivity Recall Power",
+               "Specificity 1-FPR",
+               "FDR",
+               "Precision PPV",
+               "Model Running Time (min)",
+               "Tuning Paramaters",
+               "CI 95% Lower",
+               "CI 95% Upper")
+
+#https://www.math.ucla.edu/~anderson/rw1001/library/base/html/paste.html
+#how to concatenate strings in r
+
+knn.tuning = paste("K=", knn.model$bestTune$k, sep="")
+
+#knn scores
+knn.col = c(round(knn.threshold.cm$overall[[1]], 4), 
+            round(knn.auc[[3]], 4), 
+            "Plot", 
+            "0.1",  
+            round(knn.threshold.cm$byClass[[1]], 4), 
+            round(knn.threshold.cm$byClass[[2]], 4), 
+            round((knn.threshold.cm$table[[3]]/(knn.threshold.cm$table[[3]]+
+                                           knn.threshold.cm$table[[4]])), 4), 
+            round((knn.threshold.cm$table[[1]]/(knn.threshold.cm$table[[1]]+
+                                           knn.threshold.cm$table[[2]])), 4),
+            round(knn.model.time, 4), 
+            knn.tuning,
+            round(knn.threshold.cm$overall[[3]], 4),
+            round(knn.threshold.cm$overall[[4]], 4)
+            )
+```
+
+## Linear Discriminant Analysis 
+
+### LDA Model Training
+
+```{r}
+# Train the LDA model
+# measure the time too https://www.r-bloggers.com/2017/05/5-ways-to-measure-running-time-of-r-code/
+
+start.time = Sys.time()
+
+lda.model <- train(tarp ~ Red + Blue + Green, 
+                   data = raw.data, 
+                   method = "lda", 
+                   trControl = train.control)
+
+end.time = Sys.time()
+
+lda.model.time = (end.time - start.time)
+lda.model.time = lda.model.time/60 #we know this time is in seconds and all models others in minutes
+
+#lda.model.time2 = (end.time2 - start.time2)
+
+# Summarize the results
+print(lda.model)
+
+#plot(lda.model) lda has no tuning parameters 
+
+lda.model$finalModel
+
+#lda.model$bestTune
+
+final.lda.model = lda.model$pred %>% as_tibble() 
+
+final.lda.model
+```
+
+### LDA Model Analysis, Out of Fold Examination, ROC Curve
+
+```{r, fig.show="hold", out.width="50%"}
+#the caret object that holds all the magic
+# view(lda.model$pred)
+
+#set tarp/no tarp based on fold pred$tarp Start at standard 0.5
+#knn.model$pred$TPred = as.factor(ifelse(knn.model$pred$"No.Tarp" > 0.5, "No.Tarp", "Tarp")) #write a new factor from the prediction "prob" values
+
+lda.Fold1 = lda.model$pred %>% filter(Resample == "Fold01")
+lda.Fold2 = lda.model$pred %>% filter(Resample == "Fold02")
+lda.Fold3 = lda.model$pred %>% filter(Resample == "Fold03")
+lda.Fold4 = lda.model$pred %>% filter(Resample == "Fold04")
+lda.Fold5 = lda.model$pred %>% filter(Resample == "Fold05")
+lda.Fold6 = lda.model$pred %>% filter(Resample == "Fold06")
+lda.Fold7 = lda.model$pred %>% filter(Resample == "Fold07")
+lda.Fold8 = lda.model$pred %>% filter(Resample == "Fold08")
+lda.Fold9 = lda.model$pred %>% filter(Resample == "Fold09")
+lda.Fold10 = lda.model$pred %>% filter(Resample == "Fold10")
+
+# check to see if were getting the fold value/predictions
+# xtab.lda.f1 = table(lda.Fold1$pred, lda.Fold1$obs)
+# xtab.lda.f1
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.5
+fourfoldplot(as.table(table(lda.Fold1$pred, lda.Fold1$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold1")
+
+fourfoldplot(as.table(table(lda.Fold2$pred, lda.Fold2$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold2")
+
+fourfoldplot(as.table(table(lda.Fold3$pred, lda.Fold3$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold3")
+
+fourfoldplot(as.table(table(lda.Fold4$pred, lda.Fold4$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold4")
+
+fourfoldplot(as.table(table(lda.Fold5$pred, lda.Fold5$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold5")
+
+fourfoldplot(as.table(table(lda.Fold6$pred, lda.Fold6$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold6")
+
+fourfoldplot(as.table(table(lda.Fold7$pred, lda.Fold7$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold7")
+
+fourfoldplot(as.table(table(lda.Fold8$pred, lda.Fold8$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold8")
+
+fourfoldplot(as.table(table(lda.Fold9$pred, lda.Fold9$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold9")
+
+fourfoldplot(as.table(table(lda.Fold10$pred, lda.Fold10$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix LDA.Fold10")
+
+#confusionMatrix uses default threshold of 0.5
+lda.cmf1 = confusionMatrix(lda.Fold1$pred, lda.Fold1$obs)
+lda.cmf2 = confusionMatrix(lda.Fold2$pred, lda.Fold2$obs)
+lda.cmf3 = confusionMatrix(lda.Fold3$pred, lda.Fold3$obs)
+lda.cmf4 = confusionMatrix(lda.Fold4$pred, lda.Fold4$obs)
+lda.cmf5 = confusionMatrix(lda.Fold5$pred, lda.Fold5$obs)
+lda.cmf6 = confusionMatrix(lda.Fold6$pred, lda.Fold6$obs)
+lda.cmf7 = confusionMatrix(lda.Fold7$pred, lda.Fold7$obs)
+lda.cmf8 = confusionMatrix(lda.Fold8$pred, lda.Fold8$obs)
+lda.cmf9 = confusionMatrix(lda.Fold9$pred, lda.Fold9$obs)
+lda.cmf10 = confusionMatrix(lda.Fold10$pred, lda.Fold10$obs)
+
+lda.model.cm = confusionMatrix(final.lda.model$pred, final.lda.model$obs)
+lda.model.cm
+
+#out of fold accuracy, read in each value
+lda.acc.col = c(lda.cmf1$overall[[1]], lda.cmf2$overall[[1]], lda.cmf3$overall[[1]], lda.cmf4$overall[[1]], lda.cmf5$overall[[1]], lda.cmf6$overall[[1]], lda.cmf7$overall[[1]], lda.cmf8$overall[[1]], lda.cmf9$overall[[1]], lda.cmf10$overall[[1]])
+
+lda.acc.calc.cv = mean(lda.acc.col)
+lda.acc.calc.oa = lda.model.cm$overall[[1]]
+
+lda.acc.delta.cvoa = lda.acc.calc.cv - lda.acc.calc.oa 
+
+plot(fold.num, lda.acc.col, main = "LDA CV Fold Number Accuracy vs. Fold Number", ylab = "Accuracy", xlab = "Fold Number") #same fold val from KNN
+abline(h=lda.acc.calc.oa, col = "blue")
+legend(1, y=0.986, legend="LDA Model Average Accuracy", col ="blue", lty=1)
+
+#make ROC curve
+# HTH to yardstick ROC https://yardstick.tidymodels.org/reference/roc_curve.html
+
+lda.roc.train = yardstick::roc_curve(final.lda.model, 
+                                     "No.Tarp",
+                                     truth = final.lda.model$obs)
+
+autoplot(lda.roc.train)
+```
+
+### LDA Area Under the Curve and Thresholds
+
+```{r, fig.show="hold", out.width="50%"}
+
+lda.auc = yardstick::roc_auc(final.lda.model,
+                             "No.Tarp",
+                             truth = final.lda.model$obs)
+lda.auc
+
+#manually reset threshold
+
+#set tarp/no tarp based on fold pred$tarp Start at standard 0.5
+
+final.lda.model$TPred = as.factor(ifelse(final.lda.model$No.Tarp > 0.005, "No.Tarp", "Tarp"))
+
+#table for hand adjusting matrix threshold
+#org table
+# xtab.lda.org = table(final.lda.model$pred, final.lda.model$obs)
+# xtab.lda.org
+# 
+# #new threshold 0.005
+# xtab.lda.adj = table(final.lda.model$TPred, final.lda.model$obs)
+# xtab.lda.adj
+
+#confusionMatrix feeding it the new threshold data 0.005
+lda.threshold.cm = confusionMatrix(final.lda.model$TPred, final.lda.model$obs)
+lda.threshold.cm
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.005
+fourfoldplot(as.table(table(final.lda.model$TPred, final.lda.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "LDA Confusion Matrix Threshold 0.005: Training Data")
+
+final.lda.model$TPred = as.factor(ifelse(final.lda.model$No.Tarp > 0.9, "No.Tarp", "Tarp"))
+
+#confusionMatrix feeding it the new threshold data 0.9
+confusionMatrix(final.lda.model$TPred, final.lda.model$obs)
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.9
+fourfoldplot(as.table(table(final.lda.model$TPred, final.lda.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "LDA Confusion Matrix Threshold 0.9: Training Data")
+
+```
+
+```{r, message=FALSE}
+#make a column of the final scores
+
+lda.col = c(round(lda.threshold.cm$overall[[1]], 4), 
+            round(lda.auc[[3]], 4), 
+            "Plot", 
+            "0.005",  
+            round(lda.threshold.cm$byClass[[1]], 4), 
+            round(lda.threshold.cm$byClass[[2]], 4), 
+            round((lda.threshold.cm$table[[3]]/(lda.threshold.cm$table[[3]]+
+                                           lda.threshold.cm$table[[4]])), 4), 
+            round((lda.threshold.cm$table[[1]]/(lda.threshold.cm$table[[1]]+
+                                           lda.threshold.cm$table[[2]])), 4),
+            round(lda.model.time, 4),
+            "N/A",
+            round(lda.threshold.cm$overall[[3]], 4),
+            round(lda.threshold.cm$overall[[4]], 4)
+            )
+
+```
+
+### LDA Precision Recall Curve
+
+```{r}
+#Special thanks to Sam who recommended the yardstick version as it was so much easier to get running with the rest of the yardstick data.
+
+lda.pr.train = yardstick::pr_curve(final.lda.model, 
+                                    "No.Tarp", 
+                                    truth = final.lda.model$obs)
+
+autoplot(lda.pr.train)
+```
+
+## Quadratic Discriminant Analysis (QDA)
+
+### QDA Model Training
+
+```{r}
+# Train the QDA model
+# measure the time too https://www.r-bloggers.com/2017/05/5-ways-to-measure-running-time-of-r-code/
+
+start.time = Sys.time()
+  
+qda.model <- train(tarp ~ Red + Blue + Green, 
+                   data = raw.data, 
+                   method = "qda", 
+                   trControl = train.control)
+
+end.time = Sys.time()
+
+qda.model.time = end.time - start.time
+qda.model.time = lda.model.time/60 #we know this time is in seconds and all models others in minutes
+
+# Summarize the results
+print(qda.model)
+
+#plot(qda.model) qda has no tuning parameters 
+
+qda.model$finalModel
+
+#qda.model$bestTune
+
+final.qda.model = qda.model$pred %>% as_tibble() 
+
+final.qda.model
+
+```
+
+### QDA Model Analysis, Out of Fold Examination, ROC Curve
+
+```{r, fig.show="hold", out.width="50%"}
+#the caret object that holds all the magic
+#view(qda.model$pred)
+
+#set tarp/no tarp based on fold pred$tarp Start at standard 0.5
+
+qda.Fold1 = qda.model$pred %>% filter(Resample == "Fold01")
+qda.Fold2 = qda.model$pred %>% filter(Resample == "Fold02")
+qda.Fold3 = qda.model$pred %>% filter(Resample == "Fold03")
+qda.Fold4 = qda.model$pred %>% filter(Resample == "Fold04")
+qda.Fold5 = qda.model$pred %>% filter(Resample == "Fold05")
+qda.Fold6 = qda.model$pred %>% filter(Resample == "Fold06")
+qda.Fold7 = qda.model$pred %>% filter(Resample == "Fold07")
+qda.Fold8 = qda.model$pred %>% filter(Resample == "Fold08")
+qda.Fold9 = qda.model$pred %>% filter(Resample == "Fold09")
+qda.Fold10 = qda.model$pred %>% filter(Resample == "Fold10")
+
+# check to see if were getting the fold value/predictions
+# xtab.qda.f1 = table(qda.Fold1$pred, qda.Fold1$obs)
+# xtab.qda.f1
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.5
+fourfoldplot(as.table(table(qda.Fold1$pred, qda.Fold1$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold1")
+
+fourfoldplot(as.table(table(qda.Fold2$pred, qda.Fold2$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold2")
+
+fourfoldplot(as.table(table(qda.Fold3$pred, qda.Fold3$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold3")
+
+fourfoldplot(as.table(table(qda.Fold4$pred, qda.Fold4$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold4")
+
+fourfoldplot(as.table(table(qda.Fold5$pred, qda.Fold5$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold5")
+
+fourfoldplot(as.table(table(qda.Fold6$pred, qda.Fold6$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold6")
+
+fourfoldplot(as.table(table(qda.Fold7$pred, qda.Fold7$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold7")
+
+fourfoldplot(as.table(table(qda.Fold8$pred, qda.Fold8$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold8")
+
+fourfoldplot(as.table(table(qda.Fold9$pred, qda.Fold9$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold9")
+
+fourfoldplot(as.table(table(qda.Fold10$pred, qda.Fold10$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix QDA.Fold10")
+
+#confusionMatrix uses default threshold of 0.5
+qda.cmf1 = confusionMatrix(qda.Fold1$pred, qda.Fold1$obs)
+qda.cmf2 = confusionMatrix(qda.Fold2$pred, qda.Fold2$obs)
+qda.cmf3 = confusionMatrix(qda.Fold3$pred, qda.Fold3$obs)
+qda.cmf4 = confusionMatrix(qda.Fold4$pred, qda.Fold4$obs)
+qda.cmf5 = confusionMatrix(qda.Fold5$pred, qda.Fold5$obs)
+qda.cmf6 = confusionMatrix(qda.Fold6$pred, qda.Fold6$obs)
+qda.cmf7 = confusionMatrix(qda.Fold7$pred, qda.Fold7$obs)
+qda.cmf8 = confusionMatrix(qda.Fold8$pred, qda.Fold8$obs)
+qda.cmf9 = confusionMatrix(qda.Fold9$pred, qda.Fold9$obs)
+qda.cmf10 = confusionMatrix(qda.Fold10$pred, qda.Fold10$obs)
+
+qda.model.cm = confusionMatrix(final.qda.model$pred, final.qda.model$obs)
+qda.model.cm
+
+#out of fold accuracy, read in each value
+qda.acc.col = c(qda.cmf1$overall[[1]], qda.cmf2$overall[[1]], qda.cmf3$overall[[1]], qda.cmf4$overall[[1]], qda.cmf5$overall[[1]], qda.cmf6$overall[[1]], qda.cmf7$overall[[1]], qda.cmf8$overall[[1]], qda.cmf9$overall[[1]], qda.cmf10$overall[[1]])
+
+qda.acc.calc.cv = mean(qda.acc.col)
+qda.acc.calc.oa = qda.model.cm$overall[[1]]
+
+qda.acc.delta.cvoa = qda.acc.calc.cv - qda.acc.calc.oa 
+
+plot(fold.num, qda.acc.col, main = "QDA CV Fold Number Accuracy vs. Fold Number", ylab = "Accuracy", xlab = "Fold Number") #same fold val from KNN
+abline(h=qda.acc.calc.oa, col = "blue")
+legend(1, y=0.9955, legend="QDA Model Average Accuracy", col ="blue", lty=1)
+
+#make ROC curve
+# HTH to yardstick ROC https://yardstick.tidymodels.org/reference/roc_curve.html
+
+qda.roc.train = yardstick::roc_curve(final.qda.model, 
+                                     "No.Tarp",
+                                     truth = final.qda.model$obs)
+
+autoplot(qda.roc.train)
+```
+
+### QDA Area Under the Curve and Thresholds
+
+```{r, fig.show="hold", out.width="50%"}
+
+qda.auc = yardstick::roc_auc(final.qda.model,
+                             "No.Tarp",
+                             truth = final.qda.model$obs)
+qda.auc
+
+#manually reset threshold
+
+#set tarp/no tarp based on fold pred$tarp Start at standard 0.5
+
+final.qda.model$TPred = as.factor(ifelse(final.qda.model$No.Tarp > 0.1, "No.Tarp", "Tarp"))
+
+#table for hand adjusting matrix threshold
+#org table
+xtab.qda.org = table(final.qda.model$pred, final.qda.model$obs)
+xtab.qda.org
+# 
+# #new threshold 0.1
+xtab.qda.adj = table(final.qda.model$TPred, final.qda.model$obs)
+xtab.qda.adj
+
+#confusionMatrix feeding it the new threshold data 0.1
+qda.threshold.cm = confusionMatrix(final.qda.model$TPred, final.qda.model$obs)
+qda.threshold.cm
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.1
+fourfoldplot(as.table(table(final.qda.model$TPred, final.qda.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "QDA Confusion Matrix Threshold 0.1: Training Data")
+
+final.qda.model$TPred = as.factor(ifelse(final.qda.model$No.Tarp > 0.9, "No.Tarp", "Tarp"))
+
+#confusionMatrix feeding it the new threshold data 0.9
+confusionMatrix(final.qda.model$TPred, final.qda.model$obs)
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.9
+fourfoldplot(as.table(table(final.qda.model$TPred, final.qda.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "QDA Confusion Matrix Threshold 0.9: Training Data")
+
+```
+
+```{r, message = FALSE}
+#make a column of the final scores
+
+qda.col = c(round(qda.threshold.cm$overall[[1]], 4), 
+            round(qda.auc[[3]], 4), 
+            "Plot", 
+            "0.1",  
+            round(qda.threshold.cm$byClass[[1]], 4), 
+            round(qda.threshold.cm$byClass[[2]], 4), 
+            round((qda.threshold.cm$table[[3]]/(qda.threshold.cm$table[[3]]+
+                                           qda.threshold.cm$table[[4]])), 4), 
+            round((qda.threshold.cm$table[[1]]/(qda.threshold.cm$table[[1]]+
+                                           qda.threshold.cm$table[[2]])), 4),
+            round(qda.model.time, 4),
+            "N/A",
+            round(qda.threshold.cm$overall[[3]], 4),
+            round(qda.threshold.cm$overall[[4]], 4)
+            )
+
+```
+
+### QDA Precision Recall Curve
+
+```{r}
+#Special thanks to Sam who recommended the yardstick version as it was so much easier to get running with the rest of the yardstick data.
+
+qda.pr.train = yardstick::pr_curve(final.qda.model, 
+                                    "No.Tarp", 
+                                    truth = final.qda.model$obs)
+
+autoplot(qda.pr.train)
+```
+
+## Logistic Regression (GLM)
+
+### GLM Model Training
+
+```{r, error=FALSE, warning=FALSE}
+# Train the GLM model
+# measure the time too https://www.r-bloggers.com/2017/05/5-ways-to-measure-running-time-of-r-code/
+
+start.time = Sys.time()
+  
+glm.model <- train(tarp ~ Red + Blue + Green, 
+                   data = raw.data, 
+                   method = "glm", 
+                   trControl = train.control,
+                   family = "binomial")
+
+end.time = Sys.time()
+
+glm.model.time = end.time - start.time
+glm.model.time = glm.model.time/60 #model time is in seconds
+
+# Summarize the results
+print(glm.model)
+
+#plot(glm.model) glm has no tuning parameters 
+
+glm.model$finalModel
+
+#glm.model$bestTune
+
+final.glm.model = glm.model$pred %>% as_tibble() 
+
+final.glm.model
+
+```
+
+### GLM Model Analysis, Out of Fold Examination, ROC Curve
+
+```{r, fig.show="hold", out.width="50%"}
+
+#the caret object that holds all the magic
+#view(glm.model$pred)
+
+#set tarp/no tarp based on fold pred$tarp Start at standard 0.5
+
+glm.Fold1 = glm.model$pred %>% filter(Resample == "Fold01")
+glm.Fold2 = glm.model$pred %>% filter(Resample == "Fold02")
+glm.Fold3 = glm.model$pred %>% filter(Resample == "Fold03")
+glm.Fold4 = glm.model$pred %>% filter(Resample == "Fold04")
+glm.Fold5 = glm.model$pred %>% filter(Resample == "Fold05")
+glm.Fold6 = glm.model$pred %>% filter(Resample == "Fold06")
+glm.Fold7 = glm.model$pred %>% filter(Resample == "Fold07")
+glm.Fold8 = glm.model$pred %>% filter(Resample == "Fold08")
+glm.Fold9 = glm.model$pred %>% filter(Resample == "Fold09")
+glm.Fold10 = glm.model$pred %>% filter(Resample == "Fold10")
+
+# check to see if were getting the fold value/predictions
+# xtab.glm.f1 = table(glm.Fold1$pred, glm.Fold1$obs)
+# xtab.glm.f1
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.5
+fourfoldplot(as.table(table(glm.Fold1$pred, glm.Fold1$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold1")
+
+fourfoldplot(as.table(table(glm.Fold2$pred, glm.Fold2$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold2")
+
+fourfoldplot(as.table(table(glm.Fold3$pred, glm.Fold3$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold3")
+
+fourfoldplot(as.table(table(glm.Fold4$pred, glm.Fold4$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold4")
+
+fourfoldplot(as.table(table(glm.Fold5$pred, glm.Fold5$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold5")
+
+fourfoldplot(as.table(table(glm.Fold6$pred, glm.Fold6$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold6")
+
+fourfoldplot(as.table(table(glm.Fold7$pred, glm.Fold7$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold7")
+
+fourfoldplot(as.table(table(glm.Fold8$pred, glm.Fold8$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold8")
+
+fourfoldplot(as.table(table(glm.Fold9$pred, glm.Fold9$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold9")
+
+fourfoldplot(as.table(table(glm.Fold10$pred, glm.Fold10$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix GLM.Fold10")
+
+#confusionMatrix uses default threshold of 0.5
+glm.cmf1 = confusionMatrix(glm.Fold1$pred, glm.Fold1$obs)
+glm.cmf2 = confusionMatrix(glm.Fold2$pred, glm.Fold2$obs)
+glm.cmf3 = confusionMatrix(glm.Fold3$pred, glm.Fold3$obs)
+glm.cmf4 = confusionMatrix(glm.Fold4$pred, glm.Fold4$obs)
+glm.cmf5 = confusionMatrix(glm.Fold5$pred, glm.Fold5$obs)
+glm.cmf6 = confusionMatrix(glm.Fold6$pred, glm.Fold6$obs)
+glm.cmf7 = confusionMatrix(glm.Fold7$pred, glm.Fold7$obs)
+glm.cmf8 = confusionMatrix(glm.Fold8$pred, glm.Fold8$obs)
+glm.cmf9 = confusionMatrix(glm.Fold9$pred, glm.Fold9$obs)
+glm.cmf10 = confusionMatrix(glm.Fold10$pred, glm.Fold10$obs)
+
+glm.model.cm = confusionMatrix(final.glm.model$pred, final.glm.model$obs)
+glm.model.cm
+
+#out of fold accuracy, read in each value
+glm.acc.col = c(glm.cmf1$overall[[1]], glm.cmf2$overall[[1]], glm.cmf3$overall[[1]], glm.cmf4$overall[[1]], glm.cmf5$overall[[1]], glm.cmf6$overall[[1]], glm.cmf7$overall[[1]], glm.cmf8$overall[[1]], glm.cmf9$overall[[1]], glm.cmf10$overall[[1]])
+
+glm.acc.calc.cv = mean(glm.acc.col)
+glm.acc.calc.oa = glm.model.cm$overall[[1]]
+
+glm.acc.delta.cvoa = glm.acc.calc.cv - glm.acc.calc.oa 
+
+plot(fold.num, glm.acc.col, main = "GLM CV Fold Number Accuracy vs. Fold Number", ylab = "Accuracy", xlab = "Fold Number") #same fold val from KNN
+abline(h=glm.acc.calc.oa, col = "blue")
+legend(1, y=0.9957, legend="GLM Model Average Accuracy", col ="blue", lty=1)
+
+# make ROC curve
+# HTH to yardstick ROC https://yardstick.tidymodels.org/reference/roc_curve.html
+
+glm.roc.train = yardstick::roc_curve(final.glm.model, 
+                                     "No.Tarp",
+                                     truth = final.glm.model$obs)
+
+autoplot(glm.roc.train)
+```
+
+### GLM Area Under the Curve and Thresholds
+
+```{r, fig.show="hold", out.width="50%"}
+glm.auc = yardstick::roc_auc(final.glm.model,
+                             "No.Tarp",
+                             truth = final.glm.model$obs)
+glm.auc
+
+#manually reset threshold
+
+#set tarp/no tarp based on fold pred$tarp Start at standard 0.5
+
+final.glm.model$TPred = as.factor(ifelse(final.glm.model$No.Tarp > 0.005, "No.Tarp", "Tarp"))
+
+#table for hand adjusting matrix threshold
+#org table
+# xtab.glm.org = table(final.glm.model$pred, final.glm.model$obs)
+# xtab.glm.org
+# 
+# #new threshold 0.005
+# xtab.glm.adj = table(final.glm.model$TPred, final.glm.model$obs)
+# xtab.glm.adj
+
+#confusionMatrix feeding it the new threshold data 0.005
+glm.threshold.cm = confusionMatrix(final.glm.model$TPred, final.glm.model$obs)
+glm.threshold.cm
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.005
+fourfoldplot(as.table(table(final.glm.model$TPred, final.glm.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "GLM Confusion Matrix Threshold 0.005: Training Data")
+
+final.glm.model$TPred = as.factor(ifelse(final.glm.model$No.Tarp > 0.9, "No.Tarp", "Tarp"))
+
+#confusionMatrix feeding it the new threshold data 0.9
+confusionMatrix(final.glm.model$TPred, final.glm.model$obs)
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.9
+fourfoldplot(as.table(table(final.glm.model$TPred, final.glm.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "GLM Confusion Matrix Threshold 0.9: Training Data")
+```
+
+```{r, message=FALSE}
+#make a column of the final scores
+
+glm.col = c(round(glm.threshold.cm$overall[[1]], 4), 
+            round(glm.auc[[3]], 4), 
+            "Plot", 
+            "0.005",  
+            round(glm.threshold.cm$byClass[[1]], 4), 
+            round(glm.threshold.cm$byClass[[2]], 4), 
+            round((glm.threshold.cm$table[[3]]/(glm.threshold.cm$table[[3]]+
+                                           glm.threshold.cm$table[[4]])), 4), 
+            round((glm.threshold.cm$table[[1]]/(glm.threshold.cm$table[[1]]+
+                                           glm.threshold.cm$table[[2]])), 4),
+            round(glm.model.time, 4),
+            "N/A",
+            round(glm.threshold.cm$overall[[3]], 4),
+            round(glm.threshold.cm$overall[[4]], 4)
+            )
+```
+
+### QDA Precision Recall Curve
+
+```{r}
+#Special thanks to Sam who recommended the yardstick version as it was so much easier to get running with the rest of the yardstick data.
+
+glm.pr.train = yardstick::pr_curve(final.glm.model,
+                             "No.Tarp",
+                             truth = final.glm.model$obs)
+
+autoplot(glm.pr.train)
+```
+
+## Random Forrest Analysis (RF)
+
+### RF Model Training
+
+```{r}
+# Train the RF model
+# measure the time too https://www.r-bloggers.com/2017/05/5-ways-to-measure-running-time-of-r-code/
+
+start.time = Sys.time()
+
+#engage new automagic...  
+rf.model <- train(tarp ~ Red + Blue + Green, 
+                  data = raw.data, 
+                  method = "rf", 
+                  trControl = train.control,
+                  tuneGrid = expand.grid(mtry = c(1,2,3))
+                  )
+
+# model is automagically adjusting mtry
+
+end.time = Sys.time()
+
+rf.model.time = end.time - start.time
+
+# Summarize the results
+print(rf.model)
+
+plot(rf.model) 
+
+rf.model$finalModel
+
+rf.model$bestTune
+
+final.rf.model = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% as_tibble() 
+```
+
+### RF Model Analysis, Out of Fold Examination, ROC Curve
+
+```{r, fig.show="hold", out.width="50%"}
+#the caret object that holds all the magic
+#view(rf.model$pred)
+
+rf.Fold1 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold01")
+rf.Fold2 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold02")
+rf.Fold3 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold03")
+rf.Fold4 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold04")
+rf.Fold5 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold05")
+rf.Fold6 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold06")
+rf.Fold7 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold07")
+rf.Fold8 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold08")
+rf.Fold9 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold09")
+rf.Fold10 = rf.model$pred %>% filter(mtry==rf.model$bestTune$mtry) %>% filter(Resample == "Fold10")
+
+# check to see if were getting the fold value/predictions
+# xtab.rf.f1 = table(rf.Fold1$pred, rf.Fold1$obs)
+# xtab.rf.f1
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.5
+fourfoldplot(as.table(table(rf.Fold1$pred, rf.Fold1$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold1")
+
+fourfoldplot(as.table(table(rf.Fold2$pred, rf.Fold2$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold2")
+
+fourfoldplot(as.table(table(rf.Fold3$pred, rf.Fold3$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold3")
+
+fourfoldplot(as.table(table(rf.Fold4$pred, rf.Fold4$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold4")
+
+fourfoldplot(as.table(table(rf.Fold5$pred, rf.Fold5$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold5")
+
+fourfoldplot(as.table(table(rf.Fold6$pred, rf.Fold6$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold6")
+
+fourfoldplot(as.table(table(rf.Fold7$pred, rf.Fold7$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold7")
+
+fourfoldplot(as.table(table(rf.Fold8$pred, rf.Fold8$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold8")
+
+fourfoldplot(as.table(table(rf.Fold9$pred, rf.Fold9$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold9")
+
+fourfoldplot(as.table(table(rf.Fold10$pred, rf.Fold10$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix RF.Fold10")
+
+#confusionMatrix uses default threshold of 0.5
+rf.cmf1 = confusionMatrix(rf.Fold1$pred, rf.Fold1$obs)
+rf.cmf2 = confusionMatrix(rf.Fold2$pred, rf.Fold2$obs)
+rf.cmf3 = confusionMatrix(rf.Fold3$pred, rf.Fold3$obs)
+rf.cmf4 = confusionMatrix(rf.Fold4$pred, rf.Fold4$obs)
+rf.cmf5 = confusionMatrix(rf.Fold5$pred, rf.Fold5$obs)
+rf.cmf6 = confusionMatrix(rf.Fold6$pred, rf.Fold6$obs)
+rf.cmf7 = confusionMatrix(rf.Fold7$pred, rf.Fold7$obs)
+rf.cmf8 = confusionMatrix(rf.Fold8$pred, rf.Fold8$obs)
+rf.cmf9 = confusionMatrix(rf.Fold9$pred, rf.Fold9$obs)
+rf.cmf10 = confusionMatrix(rf.Fold10$pred, rf.Fold10$obs)
+
+rf.model.cm = confusionMatrix(final.rf.model$pred, final.rf.model$obs)
+rf.model.cm
+
+#out of fold accuracy, read in each value
+rf.acc.col = c(rf.cmf1$overall[[1]], rf.cmf2$overall[[1]], rf.cmf3$overall[[1]], rf.cmf4$overall[[1]], rf.cmf5$overall[[1]], rf.cmf6$overall[[1]], rf.cmf7$overall[[1]], rf.cmf8$overall[[1]], rf.cmf9$overall[[1]], rf.cmf10$overall[[1]])
+
+rf.acc.calc.cv = mean(rf.acc.col)
+rf.acc.calc.oa = rf.model.cm$overall[[1]]
+
+rf.acc.delta.cvoa = rf.acc.calc.cv - rf.acc.calc.oa 
+
+plot(fold.num, rf.acc.col, main = "RF CV Fold Number Accuracy vs. Fold Number", ylab = "Accuracy", xlab = "Fold Number") #same fold val from KNN
+abline(h=rf.acc.calc.oa, col = "blue")
+legend(1, y=0.9973, legend="RF Model Average Accuracy", col ="blue", lty=1)
+
+#make ROC curve
+# HTH to yardstick ROC https://yardstick.tidymodels.org/reference/roc_curve.html
+
+rf.roc.train = yardstick::roc_curve(final.rf.model, 
+                                     "No.Tarp",
+                                     truth = final.rf.model$obs)
+
+autoplot(rf.roc.train)
+```
+
+### RF Area Under the Curve and Thresholds
+
+```{r}
+#, figures-side, fig.show="hold", out.width="50%"
+
+rf.auc = yardstick::roc_auc(final.rf.model,
+                             "No.Tarp",
+                             truth = final.rf.model$obs)
+rf.auc
+
+#manually reset threshold
+
+final.rf.model$TPred = as.factor(ifelse(final.rf.model$No.Tarp > 0.03, "No.Tarp", "Tarp"))
+
+#table for hand adjusting matrix threshold
+#org table
+# xtab.rf.org = table(final.rf.model$pred, final.rf.model$obs)
+# xtab.rf.org
+# 
+# #new threshold 0.005
+xtab.rf.adj = table(final.rf.model$TPred, final.rf.model$obs)
+xtab.rf.adj
+
+#confusionMatrix feeding it the new threshold data 0.03
+rf.threshold.cm = confusionMatrix(final.rf.model$TPred, final.rf.model$obs)
+rf.threshold.cm
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.03
+fourfoldplot(as.table(table(final.rf.model$TPred, final.rf.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "RF Confusion Matrix Threshold 0.03: Training Data")
+
+final.rf.model$TPred = as.factor(ifelse(final.rf.model$No.Tarp > 0.9, "No.Tarp", "Tarp"))
+
+#confusionMatrix feeding it the new threshold data 0.9
+confusionMatrix(final.rf.model$TPred, final.rf.model$obs)
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.9
+fourfoldplot(as.table(table(final.rf.model$TPred, final.rf.model$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "RF Confusion Matrix Threshold 0.9: Training Data")
+```
+
+### RF Precision Recall Curve
+
+```{r}
+rf.pr.train = yardstick::pr_curve(final.rf.model,
+                             "No.Tarp",
+                             truth = final.rf.model$obs)
+
+autoplot(rf.pr.train)
+```
+
+
+```{r, message=FALSE}
+#make a column of the final scores
+
+rf.tuning = paste("mtry=", rf.model$bestTune$mtry, sep="")
+
+rf.col = c(round(rf.threshold.cm$overall[[1]], 4), 
+           round(rf.auc[[3]], 4), 
+           "Plot", 
+           "0.03",  
+           round(rf.threshold.cm$byClass[[1]], 4), 
+           round(rf.threshold.cm$byClass[[2]], 4), 
+           round((rf.threshold.cm$table[[3]]/(rf.threshold.cm$table[[3]]+
+                                           rf.threshold.cm$table[[4]])), 4), 
+           round((rf.threshold.cm$table[[1]]/(rf.threshold.cm$table[[1]]+
+                                           rf.threshold.cm$table[[2]])), 4),
+           round(rf.model.time, 4),
+           rf.tuning,
+           round(rf.threshold.cm$overall[[3]], 4),
+           round(rf.threshold.cm$overall[[4]], 4)
+           )
+```
+
+## Support Vector Machine Analysis (SVM)
+
+### Linear SVM Model Training
+
+```{r}
+# Train the linear SVM model
+# measure the time too https://www.r-bloggers.com/2017/05/5-ways-to-measure-running-time-of-r-code/
+
+start.time = Sys.time()
+
+#engage new new automagic...  
+svm.model <- train(tarp ~ Red + Blue + Green, 
+                   data = raw.data,
+                   preProcess = c("center","scale"),
+                   method = "svmLinear3", 
+                   trControl = train.control2)
+
+# model is automagically adjusting parameters
+
+end.time = Sys.time()
+
+svm.model.time = end.time - start.time
+
+# Summarize the results
+print(svm.model)
+#best accuracy 0.9951 at cost 0.5, L2
+
+plot(svm.model) 
+
+svm.model$finalModel
+
+svm.model$bestTune
+
+final.svm.model = svm.model$pred %>% as_tibble() 
+```
+
+### Radial SVM Model Training
+
+```{r}
+# Train the radial SVM model
+# measure the time too https://www.r-bloggers.com/2017/05/5-ways-to-measure-running-time-of-r-code/
+
+start.time = Sys.time()
+
+#engage new new new automagic...  
+#After weekend discussion with Alice, she suggested tuneLength instead of tune grid.  Seems to be slightly faster and also easier.
+
+svm.model2 <- train(tarp ~ Red + Blue + Green, 
+                   data = raw.data, 
+                   preProcess = c("center","scale"),
+                   method = "svmRadial", 
+                   trControl = train.control2,
+                   tuneLength = 10
+                   )
+
+#previous best tune grid
+#tuneGrid = expand.grid(sigma = c(11, 12, 13, 14),                                           C = c(3, 4))
+
+# tuneGrid = expand.grid(sigma = c(8, 8.5, 9), C = c(0.5, 1, 2))
+
+# model is automagically adjusting parameters
+
+# cost 3 sigma 11
+
+end.time = Sys.time()
+
+svm.model2.time = end.time - start.time
+
+# Summarize the results
+print(svm.model2)
+#best accuracy 0.9973 at sigma 13, cost 3.  Of the kernels this is the best accuracy and will be used for further analysis
+
+plot(svm.model2) 
+
+svm.model2$finalModel
+
+svm.model2$bestTune
+
+final.svm.model2 = svm.model2$pred %>% as_tibble() 
+```
+
+### Polynominial SVM Model Training
+
+```{r}
+# Train the polynomial SVM model
+# measure the time too https://www.r-bloggers.com/2017/05/5-ways-to-measure-running-time-of-r-code/
+
+start.time = Sys.time()
+
+#engage new new new automagic...  
+#automagic failure 
+
+#Error : cannot allocate vector of size 22.6 Gb model fit failed for Fold05: degree=1, scale=0.001, C=0.50 
+
+svm.model3 <- train(tarp ~ Red + Blue + Green, 
+                   data = raw.data, 
+                   method = "svmPoly", 
+                   preProcess = c("center","scale"), 
+                   trControl = train.control2,
+                   tuneGrid = expand.grid(degree = c(4, 5, 6, 7), 
+                                          scale = c(1),
+                                          C = c(11, 12))
+                   )
+
+#try with center and scale. 
+#try adding tune grid
+
+end.time = Sys.time()
+
+svm.model3.time = end.time - start.time
+
+# Summarize the results
+print(svm.model3)
+#best accuracy 0.9971 at degree 6, scale 1, Cost 12 
+
+#print(svm.model4) checking the scale parameter with other tuning held constant
+# scale  Accuracy   Kappa    
+#  0.5    0.9970431  0.9520167
+#  1.0    0.9970747  0.9525250
+#  2.0    0.9043713  0.6194096
+# leave scale at 1
+
+plot(svm.model3) 
+
+#plot(svm.model4) 
+
+svm.model3$finalModel
+
+#svm.model4$finalModel
+
+svm.model3$bestTune
+
+#svm.model4$bestTune
+
+final.svm.model3 = svm.model3$pred %>% as_tibble() 
+
+```
+
+After examination of the model outputs and tuning for best performance the radial kernel was selected for use in further analysis as it had the highest accuracy after tuning and the lowest running time.
+
+### Radial SVM  Model Analysis and Out of Fold Examination
+
+```{r, fig.show="hold", out.width="50%"}
+#the caret object that holds all the magic
+#view(final.svm.model2)
+
+cfilter = svm.model2$bestTune$C
+
+svm.Fold1 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold01")
+svm.Fold2 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold02")
+svm.Fold3 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold03")
+svm.Fold4 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold04")
+svm.Fold5 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold05")
+svm.Fold6 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold06")
+svm.Fold7 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold07")
+svm.Fold8 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold08")
+svm.Fold9 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold09")
+svm.Fold10 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C) %>%  filter(Resample == "Fold10")
+
+# check to see if were getting the fold value/predictions
+# xtab.svm.f1 = table(svm.Fold1$pred, svm.Fold1$obs)
+# xtab.svm.f1
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.5
+fourfoldplot(as.table(table(svm.Fold1$pred, svm.Fold1$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold1")
+
+fourfoldplot(as.table(table(svm.Fold2$pred, svm.Fold2$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold2")
+
+fourfoldplot(as.table(table(svm.Fold3$pred, svm.Fold3$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold3")
+
+fourfoldplot(as.table(table(svm.Fold4$pred, svm.Fold4$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold4")
+
+fourfoldplot(as.table(table(svm.Fold5$pred, svm.Fold5$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold5")
+
+fourfoldplot(as.table(table(svm.Fold6$pred, svm.Fold6$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold6")
+
+fourfoldplot(as.table(table(svm.Fold7$pred, svm.Fold7$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold7")
+
+fourfoldplot(as.table(table(svm.Fold8$pred, svm.Fold8$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold8")
+
+fourfoldplot(as.table(table(svm.Fold9$pred, svm.Fold9$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold9")
+
+fourfoldplot(as.table(table(svm.Fold10$pred, svm.Fold10$obs)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix svm.Fold10")
+
+#confusionMatrix uses default threshold of 0.5
+svm.cmf1 = confusionMatrix(svm.Fold1$pred, svm.Fold1$obs)
+svm.cmf2 = confusionMatrix(svm.Fold2$pred, svm.Fold2$obs)
+svm.cmf3 = confusionMatrix(svm.Fold3$pred, svm.Fold3$obs)
+svm.cmf4 = confusionMatrix(svm.Fold4$pred, svm.Fold4$obs)
+svm.cmf5 = confusionMatrix(svm.Fold5$pred, svm.Fold5$obs)
+svm.cmf6 = confusionMatrix(svm.Fold6$pred, svm.Fold6$obs)
+svm.cmf7 = confusionMatrix(svm.Fold7$pred, svm.Fold7$obs)
+svm.cmf8 = confusionMatrix(svm.Fold8$pred, svm.Fold8$obs)
+svm.cmf9 = confusionMatrix(svm.Fold9$pred, svm.Fold9$obs)
+svm.cmf10 = confusionMatrix(svm.Fold10$pred, svm.Fold10$obs)
+
+final.svm.model2 = final.svm.model2 %>% filter(sigma==svm.model2$bestTune$sigma) %>% filter(C==svm.model2$bestTune$C)
+
+svm.model.cm = confusionMatrix(final.svm.model2$pred, final.svm.model2$obs)
+svm.model.cm
+
+#out of fold accuracy, read in each value
+svm.acc.col = c(svm.cmf1$overall[[1]], svm.cmf2$overall[[1]], svm.cmf3$overall[[1]], svm.cmf4$overall[[1]], svm.cmf5$overall[[1]], svm.cmf6$overall[[1]], svm.cmf7$overall[[1]], svm.cmf8$overall[[1]], svm.cmf9$overall[[1]], svm.cmf10$overall[[1]])
+
+svm.acc.calc.cv = mean(svm.acc.col)
+svm.acc.calc.oa = svm.model.cm$overall[[1]]
+
+svm.acc.delta.cvoa = svm.acc.calc.cv - svm.acc.calc.oa 
+
+plot(fold.num, svm.acc.col, main = "SVM (Radial) CV Fold Number Accuracy vs. Fold Number", ylab = "Accuracy", xlab = "Fold Number") #same fold val from KNN
+abline(h=svm.acc.calc.oa, col = "blue")
+legend(1, y=0.9977, legend="SVM (Radial) Model Average Accuracy", col ="blue", lty=1)
+
+
+```
+
+Due to the nature of the SVM model and its method of scoring points to either side of the defined hyperplane and the difficulty of extracting values similar to probabilities using caret, no ROC, AUC or thresholding was conducted.  However even without these addition features acceptable accuracy with achieve with this model.
+
+```{r, message=FALSE}
+#make a column of the final scores
+#cat a line split https://stackoverflow.com/questions/8112786/how-to-split-the-main-title-of-a-plot-in-2-or-more-lines
+
+
+tuning1 = paste("sigma=", round(svm.model2$bestTune$sigma, 4), sep="")
+tuning2 = paste("C=", svm.model2$bestTune$C, sep="")
+svm.tuning = paste(tuning1, ", " ,tuning2, sep="")
+
+svm.col = c(round(svm.model.cm$overall[[1]], 4), 
+            "N/A", 
+            "N/A", 
+            "N/A",  
+            round(svm.model.cm$byClass[[1]], 4), 
+            round(svm.model.cm$byClass[[2]], 4), 
+            round((svm.model.cm$table[[3]]/(svm.model.cm$table[[3]]+
+                                           svm.model.cm$table[[4]])), 4), 
+            round((svm.model.cm$table[[1]]/(svm.model.cm$table[[1]]+
+                                           svm.model.cm$table[[2]])), 4),
+            round(svm.model2.time, 4),
+            svm.tuning,
+            round(svm.model.cm$overall[[3]], 4),
+            round(svm.model.cm$overall[[4]], 4)
+            )
+
+table2.df2 = data.frame (Method = method.col, KNN = knn.col, LDA = lda.col, QDA = qda.col, GLM = glm.col, RF = rf.col, SVM = svm.col)
+
+table2.df2 %>% as_tibble
+```
+
+```{r}
+#write csv with same method we used in joining HO data http://www.sthda.com/english/wiki/fast-writing-of-data-from-r-to-txt-csv-files-readr-package
+
+write_csv(table2.df2, file="table2.csv")
+```
+
+# Predictions Using Hold Out Data
+
+Predictions were made using a hold out dataset that was assembled from several text files that were provided for this exercise.  
+
+```{r}
+HO.data <- read_csv("HOData.csv")
+
+HO.data %>% head() %>% as_tibble()
+
+HO.data %>% summary()
+
+```
+
+## KNN Model Predictions
+
+```{r, fig.show="hold", out.width="50%"}
+#test the KNN model on HOData
+#make predictions for the KNN Model
+
+start.time = Sys.time()
+
+knn.predict.testHO = predict(knn.model, newdata = HO.data, type = "prob")
+
+end.time = Sys.time()
+
+knn.predict.time = end.time - start.time
+
+#xtab.knn.predict.testHO = table(knn.predict.testHO, HO.data$Class)
+#xtab.knn.predict.testHO
+
+# #confusionMatrix wants factors for classifier
+# confusionMatrix(knn.predict.testHO, h.data.testHO$tarp)
+# 
+# #Shilpa's awesome/fancy 4-fold plot
+# fourfoldplot(as.table(table(knn.predict.testHO, h.data.testHO$tarp)),color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix at threshold 0.5: KNN h.data.testHO")
+
+#set threshold at 0.1 as we picked in tuning
+#manually reset threshold
+
+knn.predict.testHO.thres = ifelse(knn.predict.testHO$"No.Tarp" > 0.1, "Not.Tarp", "Tarp") #write a new factor from the prediction "prob" values
+
+xtab.knn.predict.testHO.thres = table(knn.predict.testHO.thres, HO.data$Class)
+xtab.knn.predict.testHO.thres
+
+#confusionMatrix feeding it the new threshold data 0.1
+knn.predict.cm = confusionMatrix(as.factor(knn.predict.testHO.thres), as.factor(HO.data$Class))
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.1
+fourfoldplot(as.table(table(as.factor(knn.predict.testHO.thres), as.factor(HO.data$Class))), color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix Threshold 0.1: KNN Hold Out Data")
+
+#Make ROC and AUC for HOData (KNN)
+knn.roc.predict = yardstick::roc_curve(all_of(knn.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+autoplot(knn.roc.predict)
+
+knn.auc.predict = yardstick::roc_auc(all_of(knn.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+knn.auc.predict
+```
+
+### KNN Predictions Precsion Recall Curve 
+
+```{r}
+#Make RPC for HOData (KNN)
+knn.pr.predict = yardstick::pr_curve(all_of(knn.predict.testHO),
+                                      "No.Tarp", 
+                                      truth = as.factor(HO.data$Class)
+                                      )
+
+autoplot(knn.pr.predict)
+```
+
+## LDA Model Predictions
+
+```{r, fig.show="hold", out.width="50%"}
+#test the LDA model on HOData
+#make predictions for the LDA Model
+
+start.time = Sys.time()
+
+lda.predict.testHO = predict(lda.model, newdata = HO.data, type = "prob")
+
+end.time = Sys.time()
+
+lda.predict.time = end.time - start.time
+lda.predict.time = lda.predict.time/60 #time in min
+
+#set threshold at 0.005 as we picked in tuning
+#manually reset threshold
+
+lda.predict.testHO.thres = ifelse(lda.predict.testHO$"No.Tarp" > 0.005, "Not.Tarp", "Tarp") #write a new factor from the prediction "prob" values
+
+xtab.lda.predict.testHO.thres = table(lda.predict.testHO.thres, HO.data$Class)
+xtab.lda.predict.testHO.thres
+
+#confusionMatrix feeding it the new threshold data 0.005
+lda.predict.cm = confusionMatrix(as.factor(lda.predict.testHO.thres), as.factor(HO.data$Class))
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.005
+fourfoldplot(as.table(table(as.factor(lda.predict.testHO.thres), as.factor(HO.data$Class))), color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix Threshold 0.005: LDA Hold Out Data")
+
+#Make ROC and AUC for HOData (LDA)
+lda.roc.predict = yardstick::roc_curve(all_of(lda.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+autoplot(lda.roc.predict)
+
+lda.auc.predict = yardstick::roc_auc(all_of(lda.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+lda.auc.predict
+```
+
+### LDA Predictions Precsion Recall Curve 
+
+```{r}
+#Make PRC for HOData (LDA)
+lda.pr.predict = yardstick::pr_curve(all_of(lda.predict.testHO),
+                                      "No.Tarp", 
+                                      truth = as.factor(HO.data$Class)
+                                      )
+
+autoplot(lda.pr.predict)
+```
+
+## QDA Model Predictions
+
+```{r, fig.show="hold", out.width="50%"}
+#test the QDA model on HOData
+#make predictions for the QDA Model
+
+start.time = Sys.time()
+
+qda.predict.testHO = predict(qda.model, newdata = HO.data, type = "prob")
+
+end.time = Sys.time()
+
+qda.predict.time = end.time - start.time
+qda.predict.time = qda.predict.time/60
+
+#set threshold at 0.005 as we picked in tuning
+#manually reset threshold
+
+qda.predict.testHO.thres = ifelse(qda.predict.testHO$"No.Tarp" > 0.1, "Not.Tarp", "Tarp") #write a new factor from the prediction "prob" values
+
+xtab.qda.predict.testHO.thres = table(qda.predict.testHO.thres, HO.data$Class)
+xtab.qda.predict.testHO.thres
+
+#confusionMatrix feeding it the new threshold data 0.1
+qda.predict.cm = confusionMatrix(as.factor(qda.predict.testHO.thres), as.factor(HO.data$Class))
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.1
+fourfoldplot(as.table(table(as.factor(qda.predict.testHO.thres), as.factor(HO.data$Class))), color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix Threshold 0.1: QDA Hold Out Data")
+
+#Make ROC and AUC for HOData (QDA)
+qda.roc.predict = yardstick::roc_curve(all_of(qda.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+autoplot(qda.roc.predict)
+
+qda.auc.predict = yardstick::roc_auc(all_of(qda.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+qda.auc.predict
+```
+
+### QDA Predictions Precsion Recall Curve 
+
+```{r}
+#Make PRC for HOData (QDA)
+qda.pr.predict = yardstick::pr_curve(all_of(qda.predict.testHO),
+                                      "No.Tarp", 
+                                      truth = as.factor(HO.data$Class)
+                                      )
+
+autoplot(qda.pr.predict)
+```
+
+## GLM Model Predictions 
+
+```{r, fig.show="hold", out.width="50%"}
+#test the GLM model on HOData
+#make predictions for the GLM Model
+
+start.time = Sys.time()
+
+glm.predict.testHO = predict(glm.model, newdata = HO.data, type = "prob")
+
+end.time = Sys.time()
+
+glm.predict.time = end.time - start.time
+glm.predict.time = glm.predict.time/60
+
+#set threshold at 0.005 as we picked in tuning
+#manually reset threshold
+
+glm.predict.testHO.thres = ifelse(glm.predict.testHO$"No.Tarp" > 0.005, "Not.Tarp", "Tarp") #write a new factor from the prediction "prob" values
+
+xtab.glm.predict.testHO.thres = table(glm.predict.testHO.thres, HO.data$Class)
+xtab.glm.predict.testHO.thres
+
+#confusionMatrix feeding it the new threshold data 0.005
+glm.predict.cm = confusionMatrix(as.factor(glm.predict.testHO.thres), as.factor(HO.data$Class))
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.005
+fourfoldplot(as.table(table(as.factor(glm.predict.testHO.thres), as.factor(HO.data$Class))), color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix Threshold 0.005: GLM Hold Out Data")
+
+#Make ROC and AUC for HOData (GLM)
+glm.roc.predict = yardstick::roc_curve(all_of(glm.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+autoplot(glm.roc.predict)
+
+glm.auc.predict = yardstick::roc_auc(all_of(glm.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+glm.auc.predict
+```
+
+### GLM Predictions Precsion Recall Curve 
+
+```{r}
+#Make PRC for HOData (GLM)
+glm.pr.predict = yardstick::pr_curve(all_of(glm.predict.testHO),
+                                      "No.Tarp", 
+                                      truth = as.factor(HO.data$Class)
+                                      )
+
+autoplot(glm.pr.predict)
+```
+
+## RF Model Predictions
+
+```{r, fig.show="hold", out.width="50%"}
+#test the RF model on HOData
+#make predictions for the RF Model
+
+start.time = Sys.time()
+
+rf.predict.testHO = predict(rf.model, newdata = HO.data, type = "prob")
+
+end.time = Sys.time()
+
+rf.predict.time = end.time - start.time
+rf.predict.time = rf.predict.time/60
+
+#set threshold at 0.005 as we picked in tuning
+#manually reset threshold
+
+rf.predict.testHO.thres = ifelse(rf.predict.testHO$"No.Tarp" > 0.03, "Not.Tarp", "Tarp") #write a new factor from the prediction "prob" values
+
+xtab.rf.predict.testHO.thres = table(rf.predict.testHO.thres, HO.data$Class)
+xtab.rf.predict.testHO.thres
+
+#confusionMatrix feeding it the new threshold data 0.03
+rf.predict.cm = confusionMatrix(as.factor(rf.predict.testHO.thres), as.factor(HO.data$Class))
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.03
+fourfoldplot(as.table(table(as.factor(rf.predict.testHO.thres), as.factor(HO.data$Class))), color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix Threshold 0.03: RF Hold Out Data")
+
+#Make ROC and AUC for HOData (RF)
+rf.roc.predict = yardstick::roc_curve(all_of(rf.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+autoplot(rf.roc.predict)
+
+rf.auc.predict = yardstick::roc_auc(all_of(rf.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+
+rf.auc.predict
+```
+
+### RF Predictions Precsion Recall Curve 
+
+```{r}
+#Make PRC for HOData (RF)
+rf.pr.predict = yardstick::pr_curve(all_of(rf.predict.testHO),
+                                      "No.Tarp", 
+                                      truth = as.factor(HO.data$Class)
+                                      )
+
+autoplot(rf.pr.predict)
+```
+
+## Radial SVM Model Predictions
+
+```{r, fig.show="hold", out.width="50%"}
+#test the SVM model on HOData
+#make predictions for the SVM (Radial) Model
+
+start.time = Sys.time()
+
+svm.predict.testHO = predict(svm.model2, newdata = HO.data) #type = "prob" svm doesn't have probs
+
+end.time = Sys.time()
+
+svm.predict.time = end.time - start.time
+svm.predict.time=svm.predict.time/60
+
+#set threshold at 0.005 as we picked in tuning
+#manually reset threshold
+
+svm.predict.testHO.thres = ifelse(svm.predict.testHO == "No.Tarp", "Not.Tarp", "Tarp") #write a new factor from the prediction "prob" values
+
+# xtab.svm.predict.testHO.thres = table(svm.predict.testHO.thres, HO.data$Class)
+# xtab.svm.predict.testHO.thres
+
+#confusionMatrix feeding it the new threshold data 0.03
+svm.predict.cm = confusionMatrix(as.factor(svm.predict.testHO.thres), as.factor(HO.data$Class))
+
+#Shilpa's awesome/fancy 4-fold plot at threshold of 0.03
+fourfoldplot(as.table(table(as.factor(svm.predict.testHO.thres), as.factor(HO.data$Class))), color = c("#E57200", "#232D4B"), conf.level = 0, margin = 1, main = "Confusion Matrix: SVM (Radial) Hold Out Data")
+```
+
+Due to the nature of the SVM model and its method of scoring points to either side of the defined hyperplane and the difficulty of extracting values similar to probabilities using caret, no ROC was produced.
+
+```{r, eval=FALSE}
+#Make ROC and AUC for HOData (SVM)
+
+#Can you do this without preds?
+# svm.roc.predict = yardstick::roc_curve(all_of(svm.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+# 
+# autoplot(svm.roc.predict)
+# 
+# svm.auc.predict = yardstick::roc_auc(all_of(svm.predict.testHO), "No.Tarp", truth = as.factor(HO.data$Class))
+# 
+# svm.auc.predict
+```
+
+
+```{r, message=FALSE}
+#make a columns of the HO scores
+
+method.col.t3 = c("Accuracy", 
+                  "AUC", 
+                  "ROC", 
+                  "Threshold", 
+                  "Sensitivity Recall Power", 
+                  "Specificity 1-FPR", 
+                  "FDR", 
+                  "Precision PPV", 
+                  "Prediction Running Time (min)", 
+                  "Tuning Paramaters",
+                  "CI 95% Lower",
+                  "CI 95% Upper"
+                  )
+
+knn.col.t3 = c(round(knn.predict.cm$overall[[1]], 4), 
+            round(knn.auc.predict[[3]], 4),
+            "Plot",
+            0.1,
+            round(knn.predict.cm$byClass[[1]], 4), 
+            round(knn.predict.cm$byClass[[2]], 4), 
+            round((knn.predict.cm$table[[3]]/(knn.predict.cm$table[[3]]+
+                                           knn.predict.cm$table[[4]])), 4), 
+            round((knn.predict.cm$table[[1]]/(knn.predict.cm$table[[1]]+
+                                           knn.predict.cm$table[[2]])), 4),
+            round(knn.predict.time, 4),
+            knn.tuning,
+            round(knn.predict.cm$overall[[3]], 4),
+            round(knn.predict.cm$overall[[4]], 4)
+            )
+
+lda.col.t3 = c(round(lda.predict.cm$overall[[1]], 4), 
+            round(lda.auc.predict[[3]], 4),
+            "Plot",
+            0.005,
+            round(lda.predict.cm$byClass[[1]], 4), 
+            round(lda.predict.cm$byClass[[2]], 4), 
+            round((lda.predict.cm$table[[3]]/(lda.predict.cm$table[[3]]+
+                                           lda.predict.cm$table[[4]])), 4), 
+            round((lda.predict.cm$table[[1]]/(lda.predict.cm$table[[1]]+
+                                           lda.predict.cm$table[[2]])), 4),
+            round(lda.predict.time, 4),
+            "N/A",
+            round(lda.predict.cm$overall[[3]], 4),
+            round(lda.predict.cm$overall[[4]], 4)
+            )
+
+qda.col.t3 = c(round(qda.predict.cm$overall[[1]], 4), 
+            round(qda.auc.predict[[3]], 4),
+            "Plot",
+            0.1,
+            round(qda.predict.cm$byClass[[1]], 4), 
+            round(qda.predict.cm$byClass[[2]], 4), 
+            round((qda.predict.cm$table[[3]]/(qda.predict.cm$table[[3]]+
+                                           qda.predict.cm$table[[4]])), 4), 
+            round((qda.predict.cm$table[[1]]/(qda.predict.cm$table[[1]]+
+                                           qda.predict.cm$table[[2]])), 4),
+            round(qda.predict.time, 4),
+            "N/A",
+            round(qda.predict.cm$overall[[3]], 4),
+            round(qda.predict.cm$overall[[4]], 4)
+            )
+
+glm.col.t3 = c(round(glm.predict.cm$overall[[1]], 4), 
+            round(glm.auc.predict[[3]], 4),
+            "Plot",
+            0.005,
+            round(glm.predict.cm$byClass[[1]], 4), 
+            round(glm.predict.cm$byClass[[2]], 4), 
+            round((glm.predict.cm$table[[3]]/(glm.predict.cm$table[[3]]+
+                                           glm.predict.cm$table[[4]])), 4), 
+            round((glm.predict.cm$table[[1]]/(glm.predict.cm$table[[1]]+
+                                           glm.predict.cm$table[[2]])), 4),
+            round(glm.predict.time, 4),
+            "N/A",
+            round(glm.predict.cm$overall[[3]], 4),
+            round(glm.predict.cm$overall[[4]], 4)
+            )
+
+rf.col.t3 = c(round(rf.predict.cm$overall[[1]], 4), 
+            round(rf.auc.predict[[3]], 4),
+            "Plot",
+            0.03,
+            round(rf.predict.cm$byClass[[1]], 4), 
+            round(rf.predict.cm$byClass[[2]], 4), 
+            round((rf.predict.cm$table[[3]]/(rf.predict.cm$table[[3]]+
+                                           rf.predict.cm$table[[4]])), 4), 
+            round((rf.predict.cm$table[[1]]/(rf.predict.cm$table[[1]]+
+                                           rf.predict.cm$table[[2]])), 4),
+            round(rf.predict.time, 4),
+            rf.tuning,
+            round(rf.predict.cm$overall[[3]], 4),
+            round(rf.predict.cm$overall[[4]], 4)
+            )
+
+svm.col.t3 = c(round(svm.predict.cm$overall[[1]], 4), 
+            "N/A",
+            "N/A",
+            "N/A",
+            round(svm.predict.cm$byClass[[1]], 4), 
+            round(svm.predict.cm$byClass[[2]], 4), 
+            round((svm.predict.cm$table[[3]]/(svm.predict.cm$table[[3]]+
+                                           svm.predict.cm$table[[4]])), 4), 
+            round((svm.predict.cm$table[[1]]/(svm.predict.cm$table[[1]]+
+                                           svm.predict.cm$table[[2]])), 4),
+            round(svm.predict.time, 4),
+            svm.tuning,
+            round(svm.predict.cm$overall[[3]], 4),
+            round(svm.predict.cm$overall[[4]], 4)
+            )
+
+table3.df = data.frame (Method = method.col.t3, KNN = knn.col.t3, LDA = lda.col.t3, QDA = qda.col.t3, GLM = glm.col.t3, RF = rf.col.t3, SVM = svm.col.t3)
+
+#table3.df %>% as_tibble
+
+write_csv(table3.df, file = "table3.csv" )
+```
+
+```{r, message=FALSE}
+knit.finish = Sys.time()
+
+knit.time = round(knit.finish - knit.start, 2)
+```
+
+The time to knit this final document was `r knit.time` minutes.
+
+
